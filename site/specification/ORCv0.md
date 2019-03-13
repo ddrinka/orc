@@ -297,7 +297,7 @@ message DecimalStatistics {
 ```
 
 Date columns record the minimum and maximum values as the number of
-days since the epoch (1/1/2015).
+days since the UNIX epoch (1/1/1970 in UTC).
 
 ```
 message DateStatistics {
@@ -438,7 +438,7 @@ values.
 * Run - a sequence of at least 3 identical values
 * Literals - a sequence of non-identical values
 
-The first byte of each group of values is a header than determines
+The first byte of each group of values is a header that determines
 whether it is a run (value between 0 to 127) or literal list (value
 between -128 to -1). For runs, the control byte is the length of the
 run minus the length of the minimal run (3) and the control byte for
@@ -691,9 +691,9 @@ number of nanoseconds.
 
 Because the number of nanoseconds often has a large number of trailing
 zeros, the number has trailing decimal zero digits removed and the
-last three bits are used to record how many zeros were removed. Thus
-1000 nanoseconds would be serialized as 0x0b and 100000 would be
-serialized as 0x0d.
+last three bits are used to record how many zeros were removed. if the
+trailing zeros are more than 2. Thus 1000 nanoseconds would be
+serialized as 0x0a and 100000 would be serialized as 0x0c.
 
 Encoding      | Stream Kind     | Optional | Contents
 :------------ | :-------------- | :------- | :-------
@@ -725,7 +725,7 @@ DIRECT        | PRESENT         | Yes      | Boolean RLE
 ## Map Columns
 
 Maps are encoded as the PRESENT stream and a length stream with number
-of items in each list. They have a child column for the key and
+of items in each map. They have a child column for the key and
 another child column for the value.
 
 Encoding      | Stream Kind     | Optional | Contents

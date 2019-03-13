@@ -319,8 +319,18 @@ public class JsonFileDump {
         writer.key("sum").value(((DoubleColumnStatistics) cs).getSum());
         writer.key("type").value(OrcProto.Type.Kind.DOUBLE);
       } else if (cs instanceof StringColumnStatistics) {
-        writer.key("min").value(((StringColumnStatistics) cs).getMinimum());
-        writer.key("max").value(((StringColumnStatistics) cs).getMaximum());
+        String lower = ((StringColumnStatistics) cs).getLowerBound();
+        if (((StringColumnStatistics) cs).getMinimum() != null) {
+          writer.key("min").value(lower);
+        } else if (lower != null) {
+          writer.key("lowerBound").value(lower);
+        }
+        String upper = ((StringColumnStatistics) cs).getUpperBound();
+        if (((StringColumnStatistics) cs).getMaximum() != null) {
+          writer.key("max").value(upper);
+        } else if (upper != null) {
+          writer.key("upperBound").value(upper);
+        }
         writer.key("totalLength").value(((StringColumnStatistics) cs).getSum());
         writer.key("type").value(OrcProto.Type.Kind.STRING);
       } else if (cs instanceof DateColumnStatistics) {

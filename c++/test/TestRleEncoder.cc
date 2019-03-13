@@ -40,7 +40,7 @@ namespace orc {
     virtual void SetUp();
 
   protected:
-    bool alignBitpacking = true;
+    bool alignBitpacking;
     std::unique_ptr<RleEncoder> getEncoder(RleVersion version,
                                            MemoryOutputStream& memStream,
                                            bool isSigned);
@@ -254,6 +254,30 @@ namespace orc {
                                 0x70, 0x28, 0x32, 0x3c, 0x46, 0x50, 0x5a, 0x64, 0x6e, 0x78, 0x82, 0x8c,
                                 0x96, 0xa0, 0xaa, 0xb4, 0xbe, 0xfc, 0xe8};
     runExampleTest(data, 20, expectedEncoded, 28);
+  }
+
+  TEST_P(RleTest, RleV2_Patched_base_big_gap) {
+    // The input data contains 512 values: data[0...510] are of a repeated pattern of (2, 1), and
+    // the last value (i.e. data[511]) is equal to 1024. This makes the last value to be the
+    // only patched value and the gap of this patch is 511.
+    const int numValues = 512;
+    int64_t data[512];
+    for (int i = 0; i < 511; i+=2) {
+      data[i] = 2;
+      data[i+1] = 1;
+    }
+    data[511] = 1024;
+
+    // Invoke the encoder.
+    const bool isSigned = true;
+    MemoryOutputStream memStream(DEFAULT_MEM_STREAM_SIZE);
+
+    std::unique_ptr<RleEncoder> encoder = getEncoder(RleVersion_2, memStream, isSigned);
+    encoder->add(data, numValues, nullptr);
+    encoder->flush();
+
+    // Decode and verify.
+    decodeAndVerify(RleVersion_2, memStream, data, numValues, nullptr, isSigned);
   }
 
   TEST_P(RleTest, RleV2_delta_example) {

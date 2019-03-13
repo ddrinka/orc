@@ -26,6 +26,26 @@
 
 namespace orc {
 
+#ifdef HAS_DOUBLE_TO_STRING
+  std::string to_string(double val) {
+    return std::to_string(val);
+  }
+#else
+  std::string to_string(double val) {
+    return std::to_string(static_cast<long double>(val));
+  }
+#endif
+
+#ifdef HAS_INT64_TO_STRING
+  std::string to_string(int64_t val) {
+    return std::to_string(val);
+  }
+#else
+  std::string to_string(int64_t val) {
+    return std::to_string(static_cast<long long int>(val));
+  }
+#endif
+
 /**
  * Compute the bits required to represent pth percentile value
  * @param data - array
@@ -34,7 +54,7 @@ namespace orc {
  */
 uint32_t RleEncoderV2::percentileBits(int64_t* data, size_t offset, size_t length, double p, bool reuseHist) {
     if ((p > 1.0) || (p <= 0.0)) {
-        throw InvalidArgument("Invalid p value: " + std::to_string(p));
+        throw InvalidArgument("Invalid p value: " + to_string(p));
     }
 
     if (!reuseHist) {
@@ -113,16 +133,14 @@ void RleEncoderV2::write(int64_t val) {
             numLiterals -= MIN_REPEAT;
             variableRunLength -= (MIN_REPEAT - 1);
 
-            int64_t tailVals[MIN_REPEAT] = {0};
-
-            memcpy(tailVals, literals + numLiterals, sizeof(int64_t) * MIN_REPEAT);
             determineEncoding(option);
             writeValues(option);
 
             // shift tail fixed runs to beginning of the buffer
             for (size_t i = 0; i < MIN_REPEAT; ++i) {
-                literals[numLiterals++] = tailVals[i];
+                literals[i] = val;
             }
+            numLiterals = MIN_REPEAT;
         }
 
         if (fixedRunLength == MAX_LITERAL_SIZE) {;
@@ -284,14 +302,16 @@ void RleEncoderV2::preparePatchedBlob(EncodingOption& option) {
 }
 
 void RleEncoderV2::determineEncoding(EncodingOption& option) {
-    // we need to compute zigzag values for DIRECT encoding if we decide to
-    // break early for delta overflows or for shorter runs
-    computeZigZagLiterals(option);
-
-    option.zzBits100p = percentileBits(zigzagLiterals, 0, numLiterals, 1.0);
+    // We need to compute zigzag values for DIRECT and PATCHED_BASE encodings,
+    // but not for SHORT_REPEAT or DELTA. So we only perform the zigzag
+    // computation when it's determined to be necessary.
 
     // not a big win for shorter runs to determine encoding
     if (numLiterals <= MIN_REPEAT) {
+        // we need to compute zigzag values for DIRECT encoding if we decide to
+        // break early for delta overflows or for shorter runs
+        computeZigZagLiterals(option);
+        option.zzBits100p = percentileBits(zigzagLiterals, 0, numLiterals, 1.0);
         option.encoding = DIRECT;
         return;
     }
@@ -331,6 +351,8 @@ void RleEncoderV2::determineEncoding(EncodingOption& option) {
     // PATCHED_BASE condition as encoding using DIRECT is faster and has less
     // overhead than PATCHED_BASE
     if (!isSafeSubtract(max, option.min)) {
+        computeZigZagLiterals(option);
+        option.zzBits100p = percentileBits(zigzagLiterals, 0, numLiterals, 1.0);
         option.encoding = DIRECT;
         return;
     }
@@ -342,11 +364,13 @@ void RleEncoderV2::determineEncoding(EncodingOption& option) {
     // fixed values run >10 which cannot be encoded with SHORT_REPEAT
     if (option.min == max) {
         if (!option.isFixedDelta) {
-            throw InvalidArgument(std::to_string(option.min) + "==" + std::to_string(max) + ", isFixedDelta cannot be false");
+            throw InvalidArgument(to_string(option.min) + "==" +
+              to_string(max) + ", isFixedDelta cannot be false");
         }
 
         if(currDelta != 0) {
-            throw InvalidArgument(std::to_string(option.min) + "==" + std::to_string(max) + ", currDelta should be zero");
+            throw InvalidArgument(to_string(option.min) + "==" +
+            to_string(max) + ", currDelta should be zero");
         }
         option.fixedDelta = 0;
         option.encoding = DELTA;
@@ -384,6 +408,8 @@ void RleEncoderV2::determineEncoding(EncodingOption& option) {
     // beyond a threshold then we need to patch the values. if the variation
     // is not significant then we can use direct encoding
 
+    computeZigZagLiterals(option);
+    option.zzBits100p = percentileBits(zigzagLiterals, 0, numLiterals, 1.0);
     option.zzBits90p = percentileBits(zigzagLiterals, 0, numLiterals, 0.9, true);
     uint32_t diffBitsLH = option.zzBits100p - option.zzBits90p;
 

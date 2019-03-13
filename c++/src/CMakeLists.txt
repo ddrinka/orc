@@ -98,6 +98,25 @@ CHECK_CXX_SOURCE_COMPILES("
   NEEDS_REDUNDANT_MOVE
 )
 
+CHECK_CXX_SOURCE_COMPILES("
+    #include<string>
+    int main(int, char *[]) {
+      double d = 5;
+      std::to_string(d);
+    }"
+  HAS_DOUBLE_TO_STRING
+)
+
+CHECK_CXX_SOURCE_COMPILES("
+    #include<cstdint>
+    #include<string>
+    int main(int, char *[]) {
+      int64_t d = 5;
+      std::to_string(d);
+    }"
+  HAS_INT64_TO_STRING
+)
+
 INCLUDE(CheckCXXSourceRuns)
 
 CHECK_CXX_SOURCE_RUNS("
@@ -150,6 +169,7 @@ include_directories (
   ${SNAPPY_INCLUDE_DIR}
   ${LZ4_INCLUDE_DIR}
   ${LIBHDFSPP_INCLUDE_DIR}
+  ${ZSTD_INCLUDE_DIR}
   )
 
 add_custom_command(OUTPUT orc_proto.pb.h orc_proto.pb.cc
@@ -179,6 +199,7 @@ set(SOURCE_FILES
   OrcFile.cc
   Reader.cc
   RLEv1.cc
+  RLEV2Util.cc
   RleDecoderV2.cc
   RleEncoderV2.cc
   RLE.cc
@@ -201,6 +222,7 @@ target_link_libraries (orc
   zlib
   snappy
   lz4
+  zstd
   ${LIBHDFSPP_LIBRARIES}
   )
 

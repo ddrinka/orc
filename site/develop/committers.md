@@ -16,9 +16,10 @@ Chinna Rao Lalam        | chinnaraol   | Committer
 Chaoyu Tang             | ctang        | Committer
 Carl Steinbach          | cws          | Committer
 Daniel Dai              | daijy        | Committer
+Dongjoon Hyun           | dongjoon     | Committer
 Deepak Majeti           | mdeepak      | PMC
 Eugene Koifman          | ekoifman     | PMC
-Gang Wu                 | gangwu       | Committer
+Gang Wu                 | gangwu       | PMC
 Alan Gates              | gates        | PMC
 Gopal Vijayaraghavan    | gopalv       | PMC
 Gunther Hagleitner      | gunther      | Committer

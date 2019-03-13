@@ -40,7 +40,7 @@ namespace orc {
     virtual ~ByteRleEncoderImpl() override;
 
     /**
-     * Encode the next batch of values
+     * Encode the next batch of values.
      * @param data to be encoded
      * @param numValues the number of values to be encoded
      * @param notNull If the pointer is null, all values are read. If the
@@ -55,8 +55,8 @@ namespace orc {
     virtual uint64_t getBufferSize() const override;
 
     /**
-     * Flushing underlying BufferedOutputStream
-    */
+     * Flush underlying BufferedOutputStream.
+     */
     virtual uint64_t flush() override;
 
     virtual void recordPosition(PositionRecorder* recorder) const override;
@@ -122,7 +122,7 @@ namespace orc {
         writeByte(
             static_cast<char>(numLiterals - static_cast<int>(MINIMUM_REPEAT)));
         writeByte(literals[0]);
-     } else {
+      } else {
         writeByte(static_cast<char>(-numLiterals));
         for (int i = 0; i < numLiterals; ++i) {
           writeByte(literals[i]);
@@ -537,8 +537,12 @@ namespace orc {
       numValues -= remainingBits;
       uint64_t bytesSkipped = numValues / 8;
       ByteRleDecoderImpl::skip(bytesSkipped);
-      ByteRleDecoderImpl::next(&lastByte, 1, nullptr);
-      remainingBits = 8 - (numValues % 8);
+      if (numValues % 8 != 0) {
+        ByteRleDecoderImpl::next(&lastByte, 1, nullptr);
+        remainingBits = 8 - (numValues % 8);
+      } else {
+        remainingBits = 0;
+      }
     }
   }
 

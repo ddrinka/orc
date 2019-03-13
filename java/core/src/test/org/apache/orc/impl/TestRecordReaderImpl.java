@@ -24,9 +24,12 @@ import static org.hamcrest.core.Is.is;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.Matchers.any;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -53,6 +56,8 @@ import org.apache.hadoop.fs.PositionedReadable;
 import org.apache.hadoop.fs.Seekable;
 import org.apache.hadoop.hive.common.io.DiskRangeList;
 import org.apache.hadoop.hive.common.type.HiveDecimal;
+import org.apache.hadoop.hive.ql.exec.vector.LongColumnVector;
+import org.apache.hadoop.hive.ql.exec.vector.VectorizedRowBatch;
 import org.apache.hadoop.hive.ql.io.sarg.SearchArgument;
 import org.apache.hadoop.hive.ql.io.sarg.SearchArgumentFactory;
 import org.apache.hadoop.hive.ql.io.sarg.SearchArgumentImpl;
@@ -2095,5 +2100,58 @@ public class TestRecordReaderImpl {
     assertEquals(true, rows[2]);
     assertEquals(1, applier.getExceptionCount()[0]);
     assertEquals(0, applier.getExceptionCount()[1]);
+  }
+
+  @Test
+  public void testSkipDataReaderOpen() throws Exception {
+    IOException ioe = new IOException("Don't open when there is no stripe");
+
+    DataReader mockedDataReader = mock(DataReader.class);
+    doThrow(ioe).when(mockedDataReader).open();
+    when(mockedDataReader.clone()).thenReturn(mockedDataReader);
+    doNothing().when(mockedDataReader).close();
+
+    Configuration conf = new Configuration();
+    Path path = new Path(workDir, "empty.orc");
+    FileSystem.get(conf).delete(path, true);
+    OrcFile.WriterOptions options = OrcFile.writerOptions(conf).setSchema(TypeDescription.createLong());
+    Writer writer = OrcFile.createWriter(path, options);
+    writer.close();
+
+    Reader reader = OrcFile.createReader(path, OrcFile.readerOptions(conf));
+    Reader.Options readerOptions = reader.options().dataReader(mockedDataReader);
+    RecordReader recordReader = reader.rows(readerOptions);
+    recordReader.close();
+  }
+
+  @Test
+  public void testCloseAtConstructorException() throws Exception {
+    Configuration conf = new Configuration();
+    Path path = new Path(workDir, "oneRow.orc");
+    FileSystem.get(conf).delete(path, true);
+
+    TypeDescription schema = TypeDescription.createLong();
+    OrcFile.WriterOptions options = OrcFile.writerOptions(conf).setSchema(schema);
+    Writer writer = OrcFile.createWriter(path, options);
+    VectorizedRowBatch writeBatch = schema.createRowBatch();
+    int row = writeBatch.size++;
+    ((LongColumnVector) writeBatch.cols[0]).vector[row] = 0;
+    writer.addRowBatch(writeBatch);
+    writer.close();
+
+    DataReader mockedDataReader = mock(DataReader.class);
+    when(mockedDataReader.clone()).thenReturn(mockedDataReader);
+    doThrow(new IOException()).when(mockedDataReader).readStripeFooter(any());
+
+    Reader reader = OrcFile.createReader(path, OrcFile.readerOptions(conf));
+    Reader.Options readerOptions = reader.options().dataReader(mockedDataReader);
+    boolean isCalled = false;
+    try {
+      reader.rows(readerOptions);
+    } catch (IOException ie) {
+      isCalled = true;
+    }
+    assertTrue(isCalled);
+    verify(mockedDataReader, times(1)).close();
   }
 }

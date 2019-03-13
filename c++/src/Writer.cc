@@ -40,7 +40,7 @@ namespace orc {
     bool enableIndex;
 
     WriterOptionsPrivate() :
-                            fileVersion(FileVersion::v_0_12()) { // default to Hive_0_11
+                            fileVersion(FileVersion::v_0_12()) { // default to Hive_0_12
       stripeSize = 64 * 1024 * 1024; // 64M
       compressionBlockSize = 64 * 1024; // 64K
       rowIndexStride = 10000;
@@ -135,7 +135,7 @@ namespace orc {
       privateBits->fileVersion = version;
       return *this;
     }
-    throw std::logic_error("Unpoorted file version specified.");
+    throw std::logic_error("Unsupported file version specified.");
   }
 
   FileVersion WriterOptions::getFileVersion() const {
@@ -194,6 +194,10 @@ namespace orc {
 
   bool WriterOptions::getEnableIndex() const {
     return privateBits->enableIndex;
+  }
+
+  bool WriterOptions::getEnableDictionary() const {
+    return privateBits->dictionaryKeySizeThreshold > 0.0;
   }
 
   Writer::~Writer() {
@@ -333,8 +337,9 @@ namespace orc {
 
   void WriterImpl::init() {
     // Write file header
-    outStream->write(WriterImpl::magicId, strlen(WriterImpl::magicId));
-    currentOffset += strlen(WriterImpl::magicId);
+    const static size_t magicIdLength = strlen(WriterImpl::magicId);
+    outStream->write(WriterImpl::magicId, magicIdLength);
+    currentOffset += magicIdLength;
 
     // Initialize file footer
     fileFooter.set_headerlength(currentOffset);
@@ -380,6 +385,9 @@ namespace orc {
     } else {
       columnWriter->mergeRowGroupStatsIntoStripeStats();
     }
+
+    // dictionary should be written before any stream is flushed
+    columnWriter->writeDictionary();
 
     std::vector<proto::Stream> streams;
     // write ROW_INDEX streams
@@ -571,7 +579,8 @@ namespace orc {
     *footer.add_types() = protoType;
 
     for (uint64_t i = 0; i < t.getSubtypeCount(); ++i) {
-      if (t.getKind() != LIST && t.getKind() != MAP && t.getKind() != UNION) {
+      // only add subtypes' field names if this type is STRUCT
+      if (t.getKind() == STRUCT) {
         footer.mutable_types(pos)->add_fieldnames(t.getFieldName(i));
       }
       footer.mutable_types(pos)->add_subtypes(++index);

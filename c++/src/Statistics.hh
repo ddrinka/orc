@@ -167,7 +167,7 @@ namespace orc {
    };
 
   typedef InternalStatisticsImpl<char> InternalCharStatistics;
-  typedef InternalStatisticsImpl<uint64_t> InternalBooleanStatistics;
+  typedef InternalStatisticsImpl<char> InternalBooleanStatistics;
   typedef InternalStatisticsImpl<int64_t> InternalIntegerStatistics;
   typedef InternalStatisticsImpl<int32_t> InternalDateStatistics;
   typedef InternalStatisticsImpl<double> InternalDoubleStatistics;
@@ -418,6 +418,8 @@ namespace orc {
       proto::BucketStatistics* bucketStats = pbStats.mutable_bucketstatistics();
       if (_hasCount) {
         bucketStats->add_count(_trueCount);
+      } else {
+        bucketStats->clear_count();
       }
     }
 
@@ -431,7 +433,7 @@ namespace orc {
                << getFalseCount() << ")" << std::endl;
       } else {
         buffer << "(true: not defined; false: not defined)" << std::endl;
-        buffer << "True and false count are not defined" << std::endl;
+        buffer << "True and false counts are not defined" << std::endl;
       }
       return buffer.str();
     }
@@ -519,11 +521,14 @@ namespace orc {
       pbStats.set_hasnull(_stats.hasNull());
       pbStats.set_numberofvalues(_stats.getNumberOfValues());
 
+      proto::DateStatistics* dateStatistics =
+        pbStats.mutable_datestatistics();
       if (_stats.hasMinimum()) {
-        proto::DateStatistics* dateStatistics =
-          pbStats.mutable_datestatistics();
         dateStatistics->set_maximum(_stats.getMaximum());
         dateStatistics->set_minimum(_stats.getMinimum());
+      } else {
+        dateStatistics->clear_minimum();
+        dateStatistics->clear_maximum();
       }
     }
 
@@ -662,9 +667,14 @@ namespace orc {
       if (_stats.hasMinimum()) {
         decStats->set_minimum(_stats.getMinimum().toString());
         decStats->set_maximum(_stats.getMaximum().toString());
+      } else {
+        decStats->clear_minimum();
+        decStats->clear_maximum();
       }
       if (_stats.hasSum()) {
         decStats->set_sum(_stats.getSum().toString());
+      } else {
+        decStats->clear_sum();
       }
     }
 
@@ -836,9 +846,14 @@ namespace orc {
       if (_stats.hasMinimum()) {
         doubleStats->set_minimum(_stats.getMinimum());
         doubleStats->set_maximum(_stats.getMaximum());
+      } else {
+        doubleStats->clear_minimum();
+        doubleStats->clear_maximum();
       }
       if (_stats.hasSum()) {
         doubleStats->set_sum(_stats.getSum());
+      } else {
+        doubleStats->clear_sum();
       }
     }
 
@@ -980,9 +995,14 @@ namespace orc {
       if (_stats.hasMinimum()) {
         intStats->set_minimum(_stats.getMinimum());
         intStats->set_maximum(_stats.getMaximum());
+      } else {
+        intStats->clear_minimum();
+        intStats->clear_maximum();
       }
       if (_stats.hasSum()) {
         intStats->set_sum(_stats.getSum());
+      } else {
+        intStats->clear_sum();
       }
     }
 
@@ -1099,8 +1119,9 @@ namespace orc {
     void update(const char* value, size_t length) {
       if (value != nullptr) {
         if (!_stats.hasMinimum()) {
-          setMinimum(std::string(value, value + length));
-          setMaximum(std::string(value, value + length));
+          std::string tempStr(value, value + length);
+          setMinimum(tempStr);
+          setMaximum(tempStr);
         } else {
           // update min
           int minCmp = strncmp(_stats.getMinimum().c_str(),
@@ -1148,9 +1169,14 @@ namespace orc {
       if (_stats.hasMinimum()) {
         strStats->set_minimum(_stats.getMinimum());
         strStats->set_maximum(_stats.getMaximum());
+      } else {
+        strStats->clear_minimum();
+        strStats->clear_maximum();
       }
       if (_stats.hasTotalLength()) {
         strStats->set_sum(static_cast<int64_t>(_stats.getTotalLength()));
+      } else {
+        strStats->clear_sum();
       }
     }
 
@@ -1267,11 +1293,14 @@ namespace orc {
       pbStats.set_hasnull(_stats.hasNull());
       pbStats.set_numberofvalues(_stats.getNumberOfValues());
 
+      proto::TimestampStatistics* tsStats =
+        pbStats.mutable_timestampstatistics();
       if (_stats.hasMinimum()) {
-        proto::TimestampStatistics* tsStats =
-          pbStats.mutable_timestampstatistics();
         tsStats->set_minimumutc(_stats.getMinimum());
         tsStats->set_maximumutc(_stats.getMaximum());
+      } else {
+        tsStats->clear_minimumutc();
+        tsStats->clear_maximumutc();
       }
     }
 
@@ -1357,7 +1386,7 @@ namespace orc {
 
   class StatisticsImpl: public Statistics {
   private:
-    std::list<ColumnStatistics*> colStats;
+    std::vector<ColumnStatistics*> colStats;
 
     // DELIBERATELY NOT IMPLEMENTED
     StatisticsImpl(const StatisticsImpl&);
@@ -1371,9 +1400,7 @@ namespace orc {
 
     virtual const ColumnStatistics* getColumnStatistics(uint32_t columnId
                                                         ) const override {
-      std::list<ColumnStatistics*>::const_iterator it = colStats.begin();
-      std::advance(it, static_cast<int64_t>(columnId));
-      return *it;
+      return colStats[columnId];
     }
 
     virtual ~StatisticsImpl() override;

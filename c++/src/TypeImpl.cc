@@ -229,7 +229,8 @@ namespace orc {
 
   std::unique_ptr<ColumnVectorBatch>
   TypeImpl::createRowBatch(uint64_t capacity,
-                           MemoryPool& memoryPool) const {
+                           MemoryPool& memoryPool,
+                           bool encoded) const {
     switch (static_cast<int64_t>(kind)) {
     case BOOLEAN:
     case BYTE:
@@ -249,7 +250,10 @@ namespace orc {
     case BINARY:
     case CHAR:
     case VARCHAR:
-      return std::unique_ptr<ColumnVectorBatch>
+      return encoded ?
+      std::unique_ptr<ColumnVectorBatch>
+        (new EncodedStringVectorBatch(capacity, memoryPool))
+      : std::unique_ptr<ColumnVectorBatch>
         (new StringVectorBatch(capacity, memoryPool));
 
     case TIMESTAMP:
@@ -262,7 +266,7 @@ namespace orc {
       for(uint64_t i=0; i < getSubtypeCount(); ++i) {
           result->fields.push_back(getSubtype(i)->
                                    createRowBatch(capacity,
-                                                  memoryPool).release());
+                                                  memoryPool, encoded).release());
       }
       return return_value;
     }
@@ -271,7 +275,7 @@ namespace orc {
       ListVectorBatch* result = new ListVectorBatch(capacity, memoryPool);
       std::unique_ptr<ColumnVectorBatch> return_value = std::unique_ptr<ColumnVectorBatch>(result);
       if (getSubtype(0) != nullptr) {
-        result->elements = getSubtype(0)->createRowBatch(capacity, memoryPool);
+        result->elements = getSubtype(0)->createRowBatch(capacity, memoryPool, encoded);
       }
       return return_value;
     }
@@ -280,10 +284,10 @@ namespace orc {
       MapVectorBatch* result = new MapVectorBatch(capacity, memoryPool);
       std::unique_ptr<ColumnVectorBatch> return_value = std::unique_ptr<ColumnVectorBatch>(result);
       if (getSubtype(0) != nullptr) {
-        result->keys = getSubtype(0)->createRowBatch(capacity, memoryPool);
+        result->keys = getSubtype(0)->createRowBatch(capacity, memoryPool, encoded);
       }
       if (getSubtype(1) != nullptr) {
-        result->elements = getSubtype(1)->createRowBatch(capacity, memoryPool);
+        result->elements = getSubtype(1)->createRowBatch(capacity, memoryPool, encoded);
       }
       return return_value;
     }
@@ -303,7 +307,7 @@ namespace orc {
       std::unique_ptr<ColumnVectorBatch> return_value = std::unique_ptr<ColumnVectorBatch>(result);
       for(uint64_t i=0; i < getSubtypeCount(); ++i) {
           result->children.push_back(getSubtype(i)->createRowBatch(capacity,
-                                                                   memoryPool)
+                                                                   memoryPool, encoded)
                                      .release());
       }
       return return_value;
@@ -403,9 +407,6 @@ namespace orc {
     case proto::Type_Kind_STRUCT: {
       TypeImpl* result = new TypeImpl(STRUCT);
       std::unique_ptr<Type> return_value = std::unique_ptr<Type>(result);
-      uint64_t size = static_cast<uint64_t>(type.subtypes_size());
-      std::vector<Type*> typeList(size);
-      std::vector<std::string> fieldList(size);
       for(int i=0; i < type.subtypes_size(); ++i) {
         result->addStructField(type.fieldnames(i),
                                convertType(footer.types(static_cast<int>
@@ -644,32 +645,31 @@ namespace orc {
                                                        const std::string &input,
                                                        size_t start,
                                                        size_t end) {
-    std::string types = input.substr(start, end - start);
     std::vector<std::pair<std::string, ORC_UNIQUE_PTR<Type> > > res;
-    size_t pos = 0;
+    size_t pos = start;
 
-    while (pos < types.size()) {
+    while (pos < end) {
       size_t endPos = pos;
-      while (endPos < types.size() && (isalnum(types[endPos]) || types[endPos] == '_')) {
+      while (endPos < end && (isalnum(input[endPos]) || input[endPos] == '_')) {
         ++endPos;
       }
 
       std::string fieldName;
-      if (types[endPos] == ':') {
-        fieldName = types.substr(pos, endPos - pos);
+      if (input[endPos] == ':') {
+        fieldName = input.substr(pos, endPos - pos);
         pos = ++endPos;
-        while (endPos < types.size() && isalpha(types[endPos])) {
+        while (endPos < end && isalpha(input[endPos])) {
           ++endPos;
         }
       }
 
       size_t nextPos = endPos + 1;
-      if (types[endPos] == '<') {
+      if (input[endPos] == '<') {
         int count = 1;
-        while (nextPos < types.size()) {
-          if (types[nextPos] == '<') {
+        while (nextPos < end) {
+          if (input[nextPos] == '<') {
             ++count;
-          } else if (types[nextPos] == '>') {
+          } else if (input[nextPos] == '>') {
             --count;
           }
           if (count == 0) {
@@ -677,24 +677,24 @@ namespace orc {
           }
           ++nextPos;
         }
-        if (nextPos == types.size()) {
+        if (nextPos == end) {
           throw std::logic_error("Invalid type string. Cannot find closing >");
         }
-      } else if (types[endPos] == '(') {
-        while (nextPos < types.size() && types[nextPos] != ')') {
+      } else if (input[endPos] == '(') {
+        while (nextPos < end && input[nextPos] != ')') {
           ++nextPos;
         }
-        if (nextPos == types.size()) {
+        if (nextPos == end) {
           throw std::logic_error("Invalid type string. Cannot find closing )");
         }
-      } else if (types[endPos] != ',' && types[endPos] != '\0') {
+      } else if (input[endPos] != ',' && endPos != end) {
         throw std::logic_error("Unrecognized character.");
       }
 
-      std::string category = types.substr(pos, endPos - pos);
-      res.push_back(std::make_pair(fieldName, parseCategory(category, types, endPos + 1, nextPos)));
+      std::string category = input.substr(pos, endPos - pos);
+      res.push_back(std::make_pair(fieldName, parseCategory(category, input, endPos + 1, nextPos)));
 
-      if (nextPos < types.size() && (types[nextPos] == ')' || types[nextPos] == '>')) {
+      if (nextPos < end && (input[nextPos] == ')' || input[nextPos] == '>')) {
         pos = nextPos + 2;
       } else {
         pos = nextPos;

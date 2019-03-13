@@ -204,6 +204,10 @@ namespace orc {
     }
   }
 
+  void ColumnWriter::writeDictionary() {
+    // PASS
+  }
+
   class StructColumnWriter : public ColumnWriter {
   public:
     StructColumnWriter(
@@ -237,6 +241,8 @@ namespace orc {
     virtual void writeIndex(
       std::vector<proto::Stream> &streams) const override;
 
+    virtual void writeDictionary() override;
+
     virtual void reset() override;
 
   private:
@@ -268,32 +274,33 @@ namespace orc {
                                ColumnVectorBatch& rowBatch,
                                uint64_t offset,
                                uint64_t numValues) {
-    ColumnWriter::add(rowBatch, offset, numValues);
     const StructVectorBatch* structBatch =
       dynamic_cast<const StructVectorBatch *>(&rowBatch);
     if (structBatch == nullptr) {
       throw InvalidArgument("Failed to cast to StructVectorBatch");
     }
 
+    ColumnWriter::add(rowBatch, offset, numValues);
     for (uint32_t i = 0; i < children.size(); ++i) {
       children[i]->add(*structBatch->fields[i], offset, numValues);
     }
 
     // update stats
-    bool hasNull = false;
     if (!structBatch->hasNulls) {
       colIndexStatistics->increase(numValues);
     } else {
+      uint64_t count = 0;
       const char* notNull = structBatch->notNull.data() + offset;
       for (uint64_t i = 0; i < numValues; ++i) {
         if (notNull[i]) {
-          colIndexStatistics->increase(1);
-        } else if (!hasNull) {
-          hasNull = true;
+          ++count;
         }
       }
+      colIndexStatistics->increase(count);
+      if (count < numValues) {
+        colIndexStatistics->setHasNull(true);
+      }
     }
-    colIndexStatistics->setHasNull(hasNull);
   }
 
   void StructColumnWriter::flush(std::vector<proto::Stream>& streams) {
@@ -380,6 +387,12 @@ namespace orc {
     }
   }
 
+  void StructColumnWriter::writeDictionary() {
+    for (uint32_t i = 0; i < children.size(); ++i) {
+      children[i]->writeDictionary();
+    }
+  }
+
   class IntegerColumnWriter : public ColumnWriter {
   public:
     IntegerColumnWriter(
@@ -431,13 +444,18 @@ namespace orc {
                                 ColumnVectorBatch& rowBatch,
                                 uint64_t offset,
                                 uint64_t numValues) {
-    ColumnWriter::add(rowBatch, offset, numValues);
-
     const LongVectorBatch* longBatch =
       dynamic_cast<const LongVectorBatch*>(&rowBatch);
     if (longBatch == nullptr) {
       throw InvalidArgument("Failed to cast to LongVectorBatch");
     }
+    IntegerColumnStatisticsImpl* intStats =
+        dynamic_cast<IntegerColumnStatisticsImpl*>(colIndexStatistics.get());
+    if (intStats == nullptr) {
+      throw InvalidArgument("Failed to cast to IntegerColumnStatisticsImpl");
+    }
+
+    ColumnWriter::add(rowBatch, offset, numValues);
 
     const int64_t* data = longBatch->data.data() + offset;
     const char* notNull = longBatch->hasNulls ?
@@ -446,22 +464,17 @@ namespace orc {
     rleEncoder->add(data, numValues, notNull);
 
     // update stats
-    IntegerColumnStatisticsImpl* intStats =
-      dynamic_cast<IntegerColumnStatisticsImpl*>(colIndexStatistics.get());
-    if (intStats == nullptr) {
-      throw InvalidArgument("Failed to cast to IntegerColumnStatisticsImpl");
-    }
-
-    bool hasNull = false;
+    uint64_t count = 0;
     for (uint64_t i = 0; i < numValues; ++i) {
       if (notNull == nullptr || notNull[i]) {
-        intStats->increase(1);
+        ++count;
         intStats->update(data[i], 1);
-      } else if (!hasNull) {
-        hasNull = true;
       }
     }
-    intStats->setHasNull(hasNull);
+    intStats->increase(count);
+    if (count < numValues) {
+      intStats->setHasNull(true);
+    }
   }
 
   void IntegerColumnWriter::flush(std::vector<proto::Stream>& streams) {
@@ -533,12 +546,17 @@ namespace orc {
   void ByteColumnWriter::add(ColumnVectorBatch& rowBatch,
                              uint64_t offset,
                              uint64_t numValues) {
-    ColumnWriter::add(rowBatch, offset, numValues);
-
     LongVectorBatch* byteBatch = dynamic_cast<LongVectorBatch*>(&rowBatch);
     if (byteBatch == nullptr) {
       throw InvalidArgument("Failed to cast to LongVectorBatch");
     }
+    IntegerColumnStatisticsImpl* intStats =
+        dynamic_cast<IntegerColumnStatisticsImpl*>(colIndexStatistics.get());
+    if (intStats == nullptr) {
+      throw InvalidArgument("Failed to cast to IntegerColumnStatisticsImpl");
+    }
+
+    ColumnWriter::add(rowBatch, offset, numValues);
 
     int64_t* data = byteBatch->data.data() + offset;
     const char* notNull = byteBatch->hasNulls ?
@@ -550,21 +568,17 @@ namespace orc {
     }
     byteRleEncoder->add(byteData, numValues, notNull);
 
-    IntegerColumnStatisticsImpl* intStats =
-        dynamic_cast<IntegerColumnStatisticsImpl*>(colIndexStatistics.get());
-    if (intStats == nullptr) {
-      throw InvalidArgument("Failed to cast to IntegerColumnStatisticsImpl");
-    }
-    bool hasNull = false;
+    uint64_t count = 0;
     for (uint64_t i = 0; i < numValues; ++i) {
       if (notNull == nullptr || notNull[i]) {
-        intStats->increase(1);
+        ++count;
         intStats->update(static_cast<int64_t>(byteData[i]), 1);
-      } else if (!hasNull) {
-        hasNull = true;
       }
     }
-    intStats->setHasNull(hasNull);
+    intStats->increase(count);
+    if (count < numValues) {
+      intStats->setHasNull(true);
+    }
   }
 
   void ByteColumnWriter::flush(std::vector<proto::Stream>& streams) {
@@ -636,12 +650,18 @@ namespace orc {
   void BooleanColumnWriter::add(ColumnVectorBatch& rowBatch,
                                 uint64_t offset,
                                 uint64_t numValues) {
-    ColumnWriter::add(rowBatch, offset, numValues);
-
     LongVectorBatch* byteBatch = dynamic_cast<LongVectorBatch*>(&rowBatch);
     if (byteBatch == nullptr) {
       throw InvalidArgument("Failed to cast to LongVectorBatch");
     }
+    BooleanColumnStatisticsImpl* boolStats =
+        dynamic_cast<BooleanColumnStatisticsImpl*>(colIndexStatistics.get());
+    if (boolStats == nullptr) {
+      throw InvalidArgument("Failed to cast to BooleanColumnStatisticsImpl");
+    }
+
+    ColumnWriter::add(rowBatch, offset, numValues);
+
     int64_t* data = byteBatch->data.data() + offset;
     const char* notNull = byteBatch->hasNulls ?
                           byteBatch->notNull.data() + offset : nullptr;
@@ -652,21 +672,17 @@ namespace orc {
     }
     rleEncoder->add(byteData, numValues, notNull);
 
-    BooleanColumnStatisticsImpl* boolStats =
-        dynamic_cast<BooleanColumnStatisticsImpl*>(colIndexStatistics.get());
-    if (boolStats == nullptr) {
-      throw InvalidArgument("Failed to cast to BooleanColumnStatisticsImpl");
-    }
-    bool hasNull = false;
+    uint64_t count = 0;
     for (uint64_t i = 0; i < numValues; ++i) {
       if (notNull == nullptr || notNull[i]) {
-        boolStats->increase(1);
+        ++count;
         boolStats->update(byteData[i] != 0, 1);
-      } else if (!hasNull) {
-        hasNull = true;
       }
     }
-    boolStats->setHasNull(hasNull);
+    boolStats->increase(count);
+    if (count < numValues) {
+      boolStats->setHasNull(true);
+    }
   }
 
   void BooleanColumnWriter::flush(std::vector<proto::Stream>& streams) {
@@ -754,27 +770,26 @@ namespace orc {
   void DoubleColumnWriter::add(ColumnVectorBatch& rowBatch,
                                uint64_t offset,
                                uint64_t numValues) {
-    ColumnWriter::add(rowBatch, offset, numValues);
     const DoubleVectorBatch* dblBatch =
       dynamic_cast<const DoubleVectorBatch*>(&rowBatch);
     if (dblBatch == nullptr) {
       throw InvalidArgument("Failed to cast to DoubleVectorBatch");
     }
-
-    const double* doubleData = dblBatch->data.data() + offset;
-    const char* notNull = dblBatch->hasNulls ?
-                          dblBatch->notNull.data() + offset : nullptr;
-
     DoubleColumnStatisticsImpl* doubleStats =
       dynamic_cast<DoubleColumnStatisticsImpl*>(colIndexStatistics.get());
     if (doubleStats == nullptr) {
       throw InvalidArgument("Failed to cast to DoubleColumnStatisticsImpl");
     }
 
+    ColumnWriter::add(rowBatch, offset, numValues);
+
+    const double* doubleData = dblBatch->data.data() + offset;
+    const char* notNull = dblBatch->hasNulls ?
+                          dblBatch->notNull.data() + offset : nullptr;
+
     size_t bytes = isFloat ? 4 : 8;
     char* data = buffer.data();
-    bool hasNull = false;
-
+    uint64_t count = 0;
     for (uint64_t i = 0; i < numValues; ++i) {
       if (!notNull || notNull[i]) {
         if (isFloat) {
@@ -783,14 +798,14 @@ namespace orc {
           encodeFloatNum<double, int64_t>(doubleData[i], data);
         }
         dataStream->write(data, bytes);
-
-        doubleStats->increase(1);
+        ++count;
         doubleStats->update(doubleData[i]);
-      } else if (!hasNull) {
-        hasNull = true;
       }
     }
-    doubleStats->setHasNull(hasNull);
+    doubleStats->increase(count);
+    if (count < numValues) {
+      doubleStats->setHasNull(true);
+    }
   }
 
   void DoubleColumnWriter::flush(std::vector<proto::Stream>& streams) {
@@ -822,6 +837,137 @@ namespace orc {
     dataStream->recordPosition(rowIndexPosition.get());
   }
 
+  /**
+   * Implementation of increasing sorted string dictionary
+   */
+  class SortedStringDictionary {
+  public:
+    struct DictEntry {
+      DictEntry(const char * str, size_t len):data(str),length(len) {}
+      const char * data;
+      size_t length;
+    };
+
+    SortedStringDictionary():totalLength(0) {}
+
+    // insert a new string into dictionary, return its insertion order
+    size_t insert(const char * data, size_t len);
+
+    // write dictionary data & length to output buffer
+    void flush(AppendOnlyBufferedStream * dataStream,
+               RleEncoder * lengthEncoder) const;
+
+    // reorder input index buffer from insertion order to dictionary order
+    void reorder(std::vector<int64_t>& idxBuffer) const;
+
+    // get dict entries in insertion order
+    void getEntriesInInsertionOrder(std::vector<const DictEntry *>&) const;
+
+    // return count of entries
+    size_t size() const;
+
+    // return total length of strings in the dictioanry
+    uint64_t length() const;
+
+    void clear();
+
+  private:
+    struct LessThan {
+      bool operator()(const DictEntry& left, const DictEntry& right) const {
+        int ret = memcmp(left.data, right.data, std::min(left.length, right.length));
+        if (ret != 0) {
+          return ret < 0;
+        }
+        return left.length < right.length;
+      }
+    };
+
+    std::map<DictEntry, size_t, LessThan> dict;
+    std::vector<std::vector<char>> data;
+    uint64_t totalLength;
+
+    // use friend class here to avoid being bothered by const function calls
+    friend class StringColumnWriter;
+    friend class CharColumnWriter;
+    friend class VarCharColumnWriter;
+    // store indexes of insertion order in the dictionary for not-null rows
+    std::vector<int64_t> idxInDictBuffer;
+  };
+
+  // insert a new string into dictionary, return its insertion order
+  size_t SortedStringDictionary::insert(const char * str, size_t len) {
+    auto ret = dict.insert({DictEntry(str, len), dict.size()});
+    if (ret.second) {
+      // make a copy to internal storage
+      data.push_back(std::vector<char>(len));
+      memcpy(data.back().data(), str, len);
+      // update dictionary entry to link pointer to internal storage
+      DictEntry * entry = const_cast<DictEntry *>(&(ret.first->first));
+      entry->data = data.back().data();
+      totalLength += len;
+    }
+    return ret.first->second;
+  }
+
+  // write dictionary data & length to output buffer
+  void SortedStringDictionary::flush(AppendOnlyBufferedStream * dataStream,
+                               RleEncoder * lengthEncoder) const {
+    for (auto it = dict.cbegin(); it != dict.cend(); ++it) {
+      dataStream->write(it->first.data, it->first.length);
+      lengthEncoder->write(static_cast<int64_t>(it->first.length));
+    }
+  }
+
+  /**
+   * Reorder input index buffer from insertion order to dictionary order
+   *
+   * We require this function because string values are buffered by indexes
+   * in their insertion order. Until the entire dictionary is complete can
+   * we get their sorted indexes in the dictionary in that ORC specification
+   * demands dictionary should be ordered. Therefore this function transforms
+   * the indexes from insertion order to dictionary value order for final
+   * output.
+   */
+  void SortedStringDictionary::reorder(std::vector<int64_t>& idxBuffer) const {
+    // iterate the dictionary to get mapping from insertion order to value order
+    std::vector<size_t> mapping(dict.size());
+    size_t dictIdx = 0;
+    for (auto it = dict.cbegin(); it != dict.cend(); ++it) {
+      mapping[it->second] = dictIdx++;
+    }
+
+    // do the transformation
+    for (size_t i = 0; i != idxBuffer.size(); ++i) {
+      idxBuffer[i] = static_cast<int64_t>(
+        mapping[static_cast<size_t>(idxBuffer[i])]);
+    }
+  }
+
+  // get dict entries in insertion order
+  void SortedStringDictionary::getEntriesInInsertionOrder(
+                    std::vector<const DictEntry *>& entries) const {
+    entries.resize(dict.size());
+    for (auto it = dict.cbegin(); it != dict.cend(); ++it) {
+      entries[it->second] = &(it->first);
+    }
+  }
+
+  // return count of entries
+  size_t SortedStringDictionary::size() const {
+    return dict.size();
+  }
+
+  // return total length of strings in the dictioanry
+  uint64_t SortedStringDictionary::length() const {
+    return totalLength;
+  }
+
+  void SortedStringDictionary::clear()  {
+    totalLength = 0;
+    data.clear();
+    dict.clear();
+  }
+
   class StringColumnWriter : public ColumnWriter {
   public:
     StringColumnWriter(const Type& type,
@@ -841,10 +987,50 @@ namespace orc {
 
     virtual void recordPosition() const override;
 
+    virtual void createRowIndexEntry() override;
+
+    virtual void writeDictionary() override;
+
+    virtual void reset() override;
+
+  private:
+    /**
+     * dictionary related functions
+     */
+    bool checkDictionaryKeyRatio();
+    void createDirectStreams();
+    void createDictStreams();
+    void deleteDictStreams();
+    void fallbackToDirectEncoding();
+
   protected:
-    std::unique_ptr<RleEncoder> lengthEncoder;
-    std::unique_ptr<AppendOnlyBufferedStream> dataStream;
     RleVersion rleVersion;
+    bool useCompression;
+    const StreamsFactory& streamsFactory;
+    bool alignedBitPacking;
+
+    // direct encoding streams
+    std::unique_ptr<RleEncoder> directLengthEncoder;
+    std::unique_ptr<AppendOnlyBufferedStream> directDataStream;
+
+    // dictionary encoding streams
+    std::unique_ptr<RleEncoder> dictDataEncoder;
+    std::unique_ptr<RleEncoder> dictLengthEncoder;
+    std::unique_ptr<AppendOnlyBufferedStream> dictStream;
+
+    /**
+     * dictionary related variables
+     */
+    SortedStringDictionary dictionary;
+    // whether or not dictionary checking is done
+    bool doneDictionaryCheck;
+    // whether or not it should be used
+    bool useDictionary;
+    // keys in the dictionary should not exceed this ratio
+    double dictSizeThreshold;
+
+    // record start row of each row group; null rows are skipped
+    mutable std::vector<size_t> startOfRowGroups;
   };
 
   StringColumnWriter::StringColumnWriter(
@@ -852,16 +1038,24 @@ namespace orc {
                           const StreamsFactory& factory,
                           const WriterOptions& options) :
                               ColumnWriter(type, factory, options),
-                              rleVersion(options.getRleVersion()) {
-    std::unique_ptr<BufferedOutputStream> lengthStream =
-        factory.createStream(proto::Stream_Kind_LENGTH);
-    lengthEncoder = createRleEncoder(std::move(lengthStream),
-                                     false,
-                                     rleVersion,
-                                     memPool,
-                                     options.getAlignedBitpacking());
-    dataStream.reset(new AppendOnlyBufferedStream(
-        factory.createStream(proto::Stream_Kind_DATA)));
+                              rleVersion(options.getRleVersion()),
+                              useCompression(options.getCompression() != CompressionKind_NONE),
+                              streamsFactory(factory),
+                              alignedBitPacking(options.getAlignedBitpacking()),
+                              doneDictionaryCheck(false),
+                              useDictionary(options.getEnableDictionary()),
+                              dictSizeThreshold(options.getDictionaryKeySizeThreshold()){
+    if (type.getKind() == TypeKind::BINARY) {
+      useDictionary = false;
+      doneDictionaryCheck = true;
+    }
+
+    if (useDictionary) {
+      createDictStreams();
+    } else {
+      doneDictionaryCheck = true;
+      createDirectStreams();
+    }
 
     if (enableIndex) {
       recordPosition();
@@ -871,74 +1065,344 @@ namespace orc {
   void StringColumnWriter::add(ColumnVectorBatch& rowBatch,
                                uint64_t offset,
                                uint64_t numValues) {
-    ColumnWriter::add(rowBatch, offset, numValues);
     const StringVectorBatch* stringBatch =
       dynamic_cast<const StringVectorBatch*>(&rowBatch);
     if (stringBatch == nullptr) {
       throw InvalidArgument("Failed to cast to StringVectorBatch");
     }
 
+    StringColumnStatisticsImpl* strStats =
+        dynamic_cast<StringColumnStatisticsImpl*>(colIndexStatistics.get());
+    if (strStats == nullptr) {
+      throw InvalidArgument("Failed to cast to StringColumnStatisticsImpl");
+    }
+
+    ColumnWriter::add(rowBatch, offset, numValues);
+
     char *const * data = stringBatch->data.data() + offset;
     const int64_t* length = stringBatch->length.data() + offset;
     const char* notNull = stringBatch->hasNulls ?
                           stringBatch->notNull.data() + offset : nullptr;
 
-    lengthEncoder->add(length, numValues, notNull);
-
-    StringColumnStatisticsImpl* strStats =
-      dynamic_cast<StringColumnStatisticsImpl*>(colIndexStatistics.get());
-    if (strStats == nullptr) {
-      throw InvalidArgument("Failed to cast to StringColumnStatisticsImpl");
+    if (!useDictionary){
+      directLengthEncoder->add(length, numValues, notNull);
     }
-    bool hasNull = false;
+
+    uint64_t count = 0;
     for (uint64_t i = 0; i < numValues; ++i) {
       if (!notNull || notNull[i]) {
-        dataStream->write(data[i], static_cast<size_t>(length[i]));
-        strStats->update(data[i], static_cast<size_t>(length[i]));
-        strStats->increase(1);
-      } else if (!hasNull) {
-        hasNull = true;
+        const size_t len = static_cast<size_t>(length[i]);
+        if (useDictionary) {
+          size_t index = dictionary.insert(data[i], len);
+          dictionary.idxInDictBuffer.push_back(static_cast<int64_t>(index));
+        } else {
+          directDataStream->write(data[i], len);
+        }
+        strStats->update(data[i], len);
+        ++count;
       }
     }
-    strStats->setHasNull(hasNull);
+    strStats->increase(count);
+    if (count < numValues) {
+      strStats->setHasNull(true);
+    }
   }
 
   void StringColumnWriter::flush(std::vector<proto::Stream>& streams) {
     ColumnWriter::flush(streams);
 
-    proto::Stream length;
-    length.set_kind(proto::Stream_Kind_LENGTH);
-    length.set_column(static_cast<uint32_t>(columnId));
-    length.set_length(lengthEncoder->flush());
-    streams.push_back(length);
+    if (useDictionary) {
+      proto::Stream data;
+      data.set_kind(proto::Stream_Kind_DATA);
+      data.set_column(static_cast<uint32_t>(columnId));
+      data.set_length(dictDataEncoder->flush());
+      streams.push_back(data);
 
-    proto::Stream data;
-    data.set_kind(proto::Stream_Kind_DATA);
-    data.set_column(static_cast<uint32_t>(columnId));
-    data.set_length(dataStream->flush());
-    streams.push_back(data);
+      proto::Stream dict;
+      dict.set_kind(proto::Stream_Kind_DICTIONARY_DATA);
+      dict.set_column(static_cast<uint32_t>(columnId));
+      dict.set_length(dictStream->flush());
+      streams.push_back(dict);
+
+      proto::Stream length;
+      length.set_kind(proto::Stream_Kind_LENGTH);
+      length.set_column(static_cast<uint32_t>(columnId));
+      length.set_length(dictLengthEncoder->flush());
+      streams.push_back(length);
+    } else {
+      proto::Stream length;
+      length.set_kind(proto::Stream_Kind_LENGTH);
+      length.set_column(static_cast<uint32_t>(columnId));
+      length.set_length(directLengthEncoder->flush());
+      streams.push_back(length);
+
+      proto::Stream data;
+      data.set_kind(proto::Stream_Kind_DATA);
+      data.set_column(static_cast<uint32_t>(columnId));
+      data.set_length(directDataStream->flush());
+      streams.push_back(data);
+    }
   }
 
   uint64_t StringColumnWriter::getEstimatedSize() const {
     uint64_t size = ColumnWriter::getEstimatedSize();
-    size += lengthEncoder->getBufferSize();
-    size += dataStream->getSize();
+    if (!useDictionary) {
+      size += directLengthEncoder->getBufferSize();
+      size += directDataStream->getSize();
+    } else {
+      size += dictionary.length();
+      size += dictionary.size() * sizeof(int32_t);
+      size += dictionary.idxInDictBuffer.size() * sizeof(int32_t);
+      if (useCompression) {
+        size /= 3;  // estimated ratio is 3:1
+      }
+    }
     return size;
   }
 
   void StringColumnWriter::getColumnEncoding(
     std::vector<proto::ColumnEncoding>& encodings) const {
     proto::ColumnEncoding encoding;
-    encoding.set_kind(RleVersionMapper(rleVersion));
-    encoding.set_dictionarysize(0);
+    if (!useDictionary) {
+      encoding.set_kind(rleVersion == RleVersion_1 ?
+                        proto::ColumnEncoding_Kind_DIRECT :
+                        proto::ColumnEncoding_Kind_DIRECT_V2);
+    } else {
+      encoding.set_kind(rleVersion == RleVersion_1 ?
+                        proto::ColumnEncoding_Kind_DICTIONARY :
+                        proto::ColumnEncoding_Kind_DICTIONARY_V2);
+    }
+    encoding.set_dictionarysize(static_cast<uint32_t>(dictionary.size()));
     encodings.push_back(encoding);
   }
 
   void StringColumnWriter::recordPosition() const {
     ColumnWriter::recordPosition();
-    dataStream->recordPosition(rowIndexPosition.get());
-    lengthEncoder->recordPosition(rowIndexPosition.get());
+    if (!useDictionary) {
+      directDataStream->recordPosition(rowIndexPosition.get());
+      directLengthEncoder->recordPosition(rowIndexPosition.get());
+    } else {
+      if (enableIndex) {
+        startOfRowGroups.push_back(dictionary.idxInDictBuffer.size());
+      }
+    }
   }
+
+  bool StringColumnWriter::checkDictionaryKeyRatio() {
+    if (!doneDictionaryCheck) {
+      useDictionary = dictionary.size() <= static_cast<size_t>(
+        static_cast<double>(dictionary.idxInDictBuffer.size()) * dictSizeThreshold);
+      doneDictionaryCheck = true;
+    }
+
+    return useDictionary;
+  }
+
+  void StringColumnWriter::createRowIndexEntry() {
+    if (useDictionary && !doneDictionaryCheck) {
+      if (!checkDictionaryKeyRatio()) {
+        fallbackToDirectEncoding();
+      }
+    }
+    ColumnWriter::createRowIndexEntry();
+  }
+
+  void StringColumnWriter::reset() {
+    ColumnWriter::reset();
+
+    dictionary.clear();
+    dictionary.idxInDictBuffer.resize(0);
+    startOfRowGroups.clear();
+    startOfRowGroups.push_back(0);
+  }
+
+  void StringColumnWriter::createDirectStreams() {
+    std::unique_ptr<BufferedOutputStream> directLengthStream =
+      streamsFactory.createStream(proto::Stream_Kind_LENGTH);
+    directLengthEncoder = createRleEncoder(std::move(directLengthStream),
+                                           false,
+                                           rleVersion,
+                                           memPool,
+                                           alignedBitPacking);
+    directDataStream.reset(new AppendOnlyBufferedStream(
+      streamsFactory.createStream(proto::Stream_Kind_DATA)));
+  }
+
+  void StringColumnWriter::createDictStreams() {
+    std::unique_ptr<BufferedOutputStream> dictDataStream =
+      streamsFactory.createStream(proto::Stream_Kind_DATA);
+    dictDataEncoder = createRleEncoder(std::move(dictDataStream),
+                                       false,
+                                       rleVersion,
+                                       memPool,
+                                       alignedBitPacking);
+    std::unique_ptr<BufferedOutputStream> dictLengthStream =
+      streamsFactory.createStream(proto::Stream_Kind_LENGTH);
+    dictLengthEncoder = createRleEncoder(std::move(dictLengthStream),
+                                         false,
+                                         rleVersion,
+                                         memPool,
+                                         alignedBitPacking);
+    dictStream.reset(new AppendOnlyBufferedStream(
+      streamsFactory.createStream(proto::Stream_Kind_DICTIONARY_DATA)));
+  }
+
+  void StringColumnWriter::deleteDictStreams() {
+    dictDataEncoder.reset(nullptr);
+    dictLengthEncoder.reset(nullptr);
+    dictStream.reset(nullptr);
+
+    dictionary.clear();
+    dictionary.idxInDictBuffer.clear();
+    startOfRowGroups.clear();
+  }
+
+  void StringColumnWriter::writeDictionary() {
+    if (useDictionary  && !doneDictionaryCheck) {
+      // when index is disabled, dictionary check happens while writing 1st stripe
+      if (!checkDictionaryKeyRatio()) {
+        fallbackToDirectEncoding();
+        return;
+      }
+    }
+
+    if (useDictionary) {
+      // flush dictionary data & length streams
+      dictionary.flush(dictStream.get(), dictLengthEncoder.get());
+
+      // convert index from insertion order to dictionary order
+      dictionary.reorder(dictionary.idxInDictBuffer);
+
+      // write data sequences
+      int64_t * data = dictionary.idxInDictBuffer.data();
+      if (enableIndex) {
+        size_t prevOffset = 0;
+        for (size_t i = 0; i < startOfRowGroups.size(); ++i) {
+          // write sequences in batch for a row group stride
+          size_t offset = startOfRowGroups[i];
+          dictDataEncoder->add(data + prevOffset, offset - prevOffset, nullptr);
+
+          // update index positions
+          int rowGroupId = static_cast<int>(i);
+          proto::RowIndexEntry* indexEntry =
+            (rowGroupId < rowIndex->entry_size()) ?
+            rowIndex->mutable_entry(rowGroupId) : rowIndexEntry.get();
+
+          // add positions for direct streams
+          RowIndexPositionRecorder recorder(*indexEntry);
+          dictDataEncoder->recordPosition(&recorder);
+
+          prevOffset = offset;
+        }
+
+        dictDataEncoder->add(data + prevOffset,
+                             dictionary.idxInDictBuffer.size() - prevOffset,
+                             nullptr);
+      } else {
+        dictDataEncoder->add(data, dictionary.idxInDictBuffer.size(), nullptr);
+      }
+    }
+  }
+
+  void StringColumnWriter::fallbackToDirectEncoding() {
+    createDirectStreams();
+
+    if (enableIndex) {
+      // fallback happens at the 1st row group;
+      // simply complete positions for direct streams
+      proto::RowIndexEntry * indexEntry = rowIndexEntry.get();
+      RowIndexPositionRecorder recorder(*indexEntry);
+      directDataStream->recordPosition(&recorder);
+      directLengthEncoder->recordPosition(&recorder);
+    }
+
+    // get dictionary entries in insertion order
+    std::vector<const SortedStringDictionary::DictEntry *> entries;
+    dictionary.getEntriesInInsertionOrder(entries);
+
+    // store each length of the data into a vector
+    const SortedStringDictionary::DictEntry * dictEntry = nullptr;
+    for (uint64_t i = 0; i != dictionary.idxInDictBuffer.size(); ++i) {
+      // write one row data in direct encoding
+      dictEntry = entries[static_cast<size_t>(dictionary.idxInDictBuffer[i])];
+      directDataStream->write(dictEntry->data, dictEntry->length);
+      directLengthEncoder->write(static_cast<int64_t>(dictEntry->length));
+    }
+
+    deleteDictStreams();
+  }
+
+  struct Utf8Utils {
+    /**
+     * Counts how many utf-8 chars of the input data
+     */
+    static uint64_t charLength(const char * data, uint64_t length) {
+      uint64_t chars = 0;
+      for (uint64_t i = 0; i < length; i++) {
+        if (isUtfStartByte(data[i])) {
+          chars++;
+        }
+      }
+      return chars;
+    }
+
+    /**
+     * Return the number of bytes required to read at most maxCharLength
+     * characters in full from a utf-8 encoded byte array provided
+     * by data. This does not validate utf-8 data, but
+     * operates correctly on already valid utf-8 data.
+     *
+     * @param maxCharLength number of characters required
+     * @param data the bytes of UTF-8
+     * @param length the length of data to truncate
+     */
+    static uint64_t truncateBytesTo(uint64_t maxCharLength,
+                                    const char * data,
+                                    uint64_t length) {
+      uint64_t chars = 0;
+      if (length <= maxCharLength) {
+        return length;
+      }
+      for (uint64_t i = 0; i < length; i++) {
+        if (isUtfStartByte(data[i])) {
+          chars++;
+        }
+        if (chars > maxCharLength) {
+          return i;
+        }
+      }
+      // everything fits
+      return length;
+    }
+
+    /**
+     * Checks if b is the first byte of a UTF-8 character.
+     */
+    inline static bool isUtfStartByte(char b) {
+      return (b & 0xC0) != 0x80;
+    }
+
+    /**
+     * Find the start of the last character that ends in the current string.
+     * @param text the bytes of the utf-8
+     * @param from the first byte location
+     * @param until the last byte location
+     * @return the index of the last character
+    */
+    static uint64_t findLastCharacter(const char * text, uint64_t from, uint64_t until) {
+      uint64_t posn = until;
+      /* we don't expect characters more than 5 bytes */
+      while (posn >= from) {
+        if (isUtfStartByte(text[posn])) {
+          return posn;
+        }
+        posn -= 1;
+      }
+      /* beginning of a valid char not found */
+      throw std::logic_error(
+        "Could not truncate string, beginning of a valid char not found");
+    }
+  };
 
   class CharColumnWriter : public StringColumnWriter {
   public:
@@ -946,10 +1410,10 @@ namespace orc {
                      const StreamsFactory& factory,
                      const WriterOptions& options) :
                          StringColumnWriter(type, factory, options),
-                         fixedLength(type.getMaximumLength()),
-                         padBuffer(*options.getMemoryPool(),
-                                   type.getMaximumLength()) {
-      // PASS
+                         maxLength(type.getMaximumLength()),
+                         padBuffer(*options.getMemoryPool()) {
+      // utf-8 is currently 4 bytes long, but it could be up to 6
+      padBuffer.resize(maxLength * 6);
     }
 
     virtual void add(ColumnVectorBatch& rowBatch,
@@ -957,51 +1421,71 @@ namespace orc {
                      uint64_t numValues) override;
 
   private:
-    uint64_t fixedLength;
+    uint64_t maxLength;
     DataBuffer<char> padBuffer;
   };
 
   void CharColumnWriter::add(ColumnVectorBatch& rowBatch,
                              uint64_t offset,
                              uint64_t numValues) {
-    ColumnWriter::add(rowBatch, offset, numValues);
     StringVectorBatch* charsBatch = dynamic_cast<StringVectorBatch*>(&rowBatch);
     if (charsBatch == nullptr) {
       throw InvalidArgument("Failed to cast to StringVectorBatch");
     }
-
-    char** data = charsBatch->data.data() + offset;
-    int64_t* length = charsBatch->length.data() + offset;
-    const char* notNull = charsBatch->hasNulls ?
-                          charsBatch->notNull.data() + offset : nullptr;
 
     StringColumnStatisticsImpl* strStats =
         dynamic_cast<StringColumnStatisticsImpl*>(colIndexStatistics.get());
     if (strStats == nullptr) {
       throw InvalidArgument("Failed to cast to StringColumnStatisticsImpl");
     }
-    bool hasNull = false;
 
+    ColumnWriter::add(rowBatch, offset, numValues);
+
+    char** data = charsBatch->data.data() + offset;
+    int64_t* length = charsBatch->length.data() + offset;
+    const char* notNull = charsBatch->hasNulls ?
+                          charsBatch->notNull.data() + offset : nullptr;
+
+    uint64_t count = 0;
     for (uint64_t i = 0; i < numValues; ++i) {
       if (!notNull || notNull[i]) {
-        char *charData = data[i];
-        uint64_t oriLength = static_cast<uint64_t>(length[i]);
-        if (oriLength < fixedLength) {
-          memcpy(padBuffer.data(), data[i], oriLength);
-          memset(padBuffer.data() + oriLength, ' ', fixedLength - oriLength);
+        const char * charData = nullptr;
+        uint64_t originLength = static_cast<uint64_t>(length[i]);
+        uint64_t charLength = Utf8Utils::charLength(data[i], originLength);
+        if (charLength >= maxLength) {
+          charData = data[i];
+          length[i] = static_cast<int64_t>(
+            Utf8Utils::truncateBytesTo(maxLength, data[i], originLength));
+        } else {
           charData = padBuffer.data();
+          // the padding is exactly 1 byte per char
+          length[i] = length[i] + static_cast<int64_t>(maxLength - charLength);
+          memcpy(padBuffer.data(), data[i], originLength);
+          memset(padBuffer.data() + originLength,
+                 ' ',
+                 static_cast<size_t>(length[i]) - originLength);
         }
-        length[i] = static_cast<int64_t>(fixedLength);
-        dataStream->write(charData, fixedLength);
 
-        strStats->update(charData, fixedLength);
-        strStats->increase(1);
-      } else if (!hasNull) {
-        hasNull = true;
+        if (useDictionary) {
+          size_t index = dictionary.insert(charData, static_cast<size_t>(length[i]));
+          dictionary.idxInDictBuffer.push_back(static_cast<int64_t>(index));
+        } else {
+          directDataStream->write(charData, static_cast<size_t>(length[i]));
+        }
+
+        strStats->update(charData, static_cast<size_t>(length[i]));
+        ++count;
       }
     }
-    lengthEncoder->add(length, numValues, notNull);
-    strStats->setHasNull(hasNull);
+
+    if (!useDictionary) {
+      directLengthEncoder->add(length, numValues, notNull);
+    }
+
+    strStats->increase(count);
+    if (count < numValues) {
+      strStats->setHasNull(true);
+    }
   }
 
   class VarCharColumnWriter : public StringColumnWriter {
@@ -1025,39 +1509,51 @@ namespace orc {
   void VarCharColumnWriter::add(ColumnVectorBatch& rowBatch,
                                 uint64_t offset,
                                 uint64_t numValues) {
-    ColumnWriter::add(rowBatch, offset, numValues);
     StringVectorBatch* charsBatch = dynamic_cast<StringVectorBatch*>(&rowBatch);
     if (charsBatch == nullptr) {
       throw InvalidArgument("Failed to cast to StringVectorBatch");
     }
-
-    char* const* data = charsBatch->data.data() + offset;
-    int64_t* length = charsBatch->length.data() + offset;
-    const char* notNull = charsBatch->hasNulls ?
-                          charsBatch->notNull.data() + offset : nullptr;
 
     StringColumnStatisticsImpl* strStats =
         dynamic_cast<StringColumnStatisticsImpl*>(colIndexStatistics.get());
     if (strStats == nullptr) {
       throw InvalidArgument("Failed to cast to StringColumnStatisticsImpl");
     }
-    bool hasNull = false;
 
+    ColumnWriter::add(rowBatch, offset, numValues);
+
+    char* const* data = charsBatch->data.data() + offset;
+    int64_t* length = charsBatch->length.data() + offset;
+    const char* notNull = charsBatch->hasNulls ?
+                          charsBatch->notNull.data() + offset : nullptr;
+
+    uint64_t count = 0;
     for (uint64_t i = 0; i < numValues; ++i) {
       if (!notNull || notNull[i]) {
-        if (length[i] > static_cast<int64_t>(maxLength)) {
-          length[i] = static_cast<int64_t>(maxLength);
+        uint64_t itemLength = Utf8Utils::truncateBytesTo(
+          maxLength, data[i], static_cast<uint64_t>(length[i]));
+        length[i] = static_cast<int64_t>(itemLength);
+
+        if (useDictionary) {
+          size_t index = dictionary.insert(data[i], static_cast<size_t>(length[i]));
+          dictionary.idxInDictBuffer.push_back(static_cast<int64_t>(index));
+        } else {
+          directDataStream->write(data[i], static_cast<size_t>(length[i]));
         }
-        dataStream->write(data[i], static_cast<size_t>(length[i]));
 
         strStats->update(data[i], static_cast<size_t>(length[i]));
-        strStats->increase(1);
-      } else if (!hasNull) {
-        hasNull = true;
+        ++count;
       }
     }
-    lengthEncoder->add(length, numValues, notNull);
-    strStats->setHasNull(hasNull);
+
+    if (!useDictionary) {
+      directLengthEncoder->add(length, numValues, notNull);
+    }
+
+    strStats->increase(count);
+    if (count < numValues) {
+      strStats->setHasNull(true);
+    }
   }
 
   class BinaryColumnWriter : public StringColumnWriter {
@@ -1077,16 +1573,10 @@ namespace orc {
   void BinaryColumnWriter::add(ColumnVectorBatch& rowBatch,
                                uint64_t offset,
                                uint64_t numValues) {
-    ColumnWriter::add(rowBatch, offset, numValues);
-
     StringVectorBatch* binBatch = dynamic_cast<StringVectorBatch*>(&rowBatch);
     if (binBatch == nullptr) {
       throw InvalidArgument("Failed to cast to StringVectorBatch");
     }
-    char** data = binBatch->data.data() + offset;
-    int64_t* length = binBatch->length.data() + offset;
-    const char* notNull = binBatch->hasNulls ?
-                          binBatch->notNull.data() + offset : nullptr;
 
     BinaryColumnStatisticsImpl* binStats =
         dynamic_cast<BinaryColumnStatisticsImpl*>(colIndexStatistics.get());
@@ -1094,20 +1584,28 @@ namespace orc {
       throw InvalidArgument("Failed to cast to BinaryColumnStatisticsImpl");
     }
 
-    bool hasNull = false;
+    ColumnWriter::add(rowBatch, offset, numValues);
+
+    char** data = binBatch->data.data() + offset;
+    int64_t* length = binBatch->length.data() + offset;
+    const char* notNull = binBatch->hasNulls ?
+                          binBatch->notNull.data() + offset : nullptr;
+
+    uint64_t count = 0;
     for (uint64_t i = 0; i < numValues; ++i) {
       uint64_t unsignedLength = static_cast<uint64_t>(length[i]);
       if (!notNull || notNull[i]) {
-        dataStream->write(data[i], unsignedLength);
+        directDataStream->write(data[i], unsignedLength);
 
         binStats->update(unsignedLength);
-        binStats->increase(1);
-      } else if (!hasNull) {
-        hasNull = true;
+        ++count;
       }
     }
-    lengthEncoder->add(length, numValues, notNull);
-    binStats->setHasNull(hasNull);
+    directLengthEncoder->add(length, numValues, notNull);
+    binStats->increase(count);
+    if (count < numValues) {
+      binStats->setHasNull(true);
+    }
   }
 
   class TimestampColumnWriter : public ColumnWriter {
@@ -1166,8 +1664,9 @@ namespace orc {
 
   // Because the number of nanoseconds often has a large number of trailing zeros,
   // the number has trailing decimal zero digits removed and the last three bits
-  // are used to record how many zeros were removed. Thus 1000 nanoseconds would
-  // be serialized as 0x0b and 100000 would be serialized as 0x0d.
+  // are used to record how many zeros were removed if the trailing zeros are
+  // more than 2. Thus 1000 nanoseconds would be serialized as 0x0a and
+  // 100000 would be serialized as 0x0c.
   static int64_t formatNano(int64_t nanos) {
     if (nanos == 0) {
       return 0;
@@ -1187,29 +1686,31 @@ namespace orc {
   void TimestampColumnWriter::add(ColumnVectorBatch& rowBatch,
                                   uint64_t offset,
                                   uint64_t numValues) {
-    ColumnWriter::add(rowBatch, offset, numValues);
     TimestampVectorBatch* tsBatch =
       dynamic_cast<TimestampVectorBatch*>(&rowBatch);
     if (tsBatch == nullptr) {
       throw InvalidArgument("Failed to cast to TimestampVectorBatch");
     }
 
-    const char* notNull = tsBatch->hasNulls ?
-                          tsBatch->notNull.data() + offset : nullptr;
-    int64_t *secs = tsBatch->data.data() + offset;
-    int64_t *nanos = tsBatch->nanoseconds.data() + offset;
-
     TimestampColumnStatisticsImpl* tsStats =
         dynamic_cast<TimestampColumnStatisticsImpl*>(colIndexStatistics.get());
     if (tsStats == nullptr) {
       throw InvalidArgument("Failed to cast to TimestampColumnStatisticsImpl");
     }
-    bool hasNull = false;
+
+    ColumnWriter::add(rowBatch, offset, numValues);
+
+    const char* notNull = tsBatch->hasNulls ?
+                          tsBatch->notNull.data() + offset : nullptr;
+    int64_t *secs = tsBatch->data.data() + offset;
+    int64_t *nanos = tsBatch->nanoseconds.data() + offset;
+
+    uint64_t count = 0;
     for (uint64_t i = 0; i < numValues; ++i) {
       if (notNull == nullptr || notNull[i]) {
         // TimestampVectorBatch already stores data in UTC
         int64_t millsUTC = secs[i] * 1000 + nanos[i] / 1000000;
-        tsStats->increase(1);
+        ++count;
         tsStats->update(millsUTC);
 
         if (secs[i] < 0 && nanos[i] != 0) {
@@ -1218,11 +1719,12 @@ namespace orc {
 
         secs[i] -= timezone.getEpoch();
         nanos[i] = formatNano(nanos[i]);
-      } else if (!hasNull) {
-        hasNull = true;
       }
     }
-    tsStats->setHasNull(hasNull);
+    tsStats->increase(count);
+    if (count < numValues) {
+      tsStats->setHasNull(true);
+    }
 
     secRleEncoder->add(secs, numValues, notNull);
     nanoRleEncoder->add(nanos, numValues, notNull);
@@ -1287,12 +1789,19 @@ namespace orc {
   void DateColumnWriter::add(ColumnVectorBatch& rowBatch,
                              uint64_t offset,
                              uint64_t numValues) {
-    ColumnWriter::add(rowBatch, offset, numValues);
     const LongVectorBatch* longBatch =
       dynamic_cast<const LongVectorBatch*>(&rowBatch);
     if (longBatch == nullptr) {
       throw InvalidArgument("Failed to cast to LongVectorBatch");
     }
+
+    DateColumnStatisticsImpl* dateStats =
+        dynamic_cast<DateColumnStatisticsImpl*>(colIndexStatistics.get());
+    if (dateStats == nullptr) {
+      throw InvalidArgument("Failed to cast to DateColumnStatisticsImpl");
+    }
+
+    ColumnWriter::add(rowBatch, offset, numValues);
 
     const int64_t* data = longBatch->data.data() + offset;
     const char* notNull = longBatch->hasNulls ?
@@ -1300,21 +1809,17 @@ namespace orc {
 
     rleEncoder->add(data, numValues, notNull);
 
-    DateColumnStatisticsImpl* dateStats =
-      dynamic_cast<DateColumnStatisticsImpl*>(colIndexStatistics.get());
-    if (dateStats == nullptr) {
-      throw InvalidArgument("Failed to cast to DateColumnStatisticsImpl");
-    }
-    bool hasNull = false;
+    uint64_t count = 0;
     for (uint64_t i = 0; i < numValues; ++i) {
       if (!notNull || notNull[i]) {
-        dateStats->increase(1);
+        ++count;
         dateStats->update(static_cast<int32_t>(data[i]));
-      } else if (!hasNull) {
-        hasNull = true;
       }
     }
-    dateStats->setHasNull(hasNull);
+    dateStats->increase(count);
+    if (count < numValues) {
+      dateStats->setHasNull(true);
+    }
   }
 
   class Decimal64ColumnWriter : public ColumnWriter {
@@ -1376,23 +1881,25 @@ namespace orc {
   void Decimal64ColumnWriter::add(ColumnVectorBatch& rowBatch,
                                   uint64_t offset,
                                   uint64_t numValues) {
-    ColumnWriter::add(rowBatch, offset, numValues);
     const Decimal64VectorBatch* decBatch =
       dynamic_cast<const Decimal64VectorBatch*>(&rowBatch);
     if (decBatch == nullptr) {
       throw InvalidArgument("Failed to cast to Decimal64VectorBatch");
     }
 
-    const char* notNull = decBatch->hasNulls ?
-                          decBatch->notNull.data() + offset : nullptr;
-    const int64_t* values = decBatch->values.data() + offset;
     DecimalColumnStatisticsImpl* decStats =
       dynamic_cast<DecimalColumnStatisticsImpl*>(colIndexStatistics.get());
     if (decStats == nullptr) {
       throw InvalidArgument("Failed to cast to DecimalColumnStatisticsImpl");
     }
-    bool hasNull = false;
 
+    ColumnWriter::add(rowBatch, offset, numValues);
+
+    const char* notNull = decBatch->hasNulls ?
+                          decBatch->notNull.data() + offset : nullptr;
+    const int64_t* values = decBatch->values.data() + offset;
+
+    uint64_t count = 0;
     for (uint64_t i = 0; i < numValues; ++i) {
       if (!notNull || notNull[i]) {
         int64_t val = zigZag(values[i]);
@@ -1408,17 +1915,16 @@ namespace orc {
           }
         }
         valueStream->write(buffer, static_cast<size_t>(data - buffer));
-
-        decStats->increase(1);
+        ++count;
         decStats->update(Decimal(values[i], static_cast<int32_t>(scale)));
-      } else if (!hasNull) {
-        hasNull = true;
       }
+    }
+    decStats->increase(count);
+    if (count < numValues) {
+      decStats->setHasNull(true);
     }
     std::vector<int64_t> scales(numValues, static_cast<int64_t>(scale));
     scaleEncoder->add(scales.data(), numValues, notNull);
-
-    decStats->setHasNull(hasNull);
   }
 
   void Decimal64ColumnWriter::flush(std::vector<proto::Stream>& streams) {
@@ -1496,25 +2002,27 @@ namespace orc {
   void Decimal128ColumnWriter::add(ColumnVectorBatch& rowBatch,
                                    uint64_t offset,
                                    uint64_t numValues) {
-    ColumnWriter::add(rowBatch, offset, numValues);
     const Decimal128VectorBatch* decBatch =
       dynamic_cast<const Decimal128VectorBatch*>(&rowBatch);
     if (decBatch == nullptr) {
       throw InvalidArgument("Failed to cast to Decimal128VectorBatch");
     }
 
-    const char* notNull = decBatch->hasNulls ?
-                          decBatch->notNull.data() + offset : nullptr;
-    const Int128* values = decBatch->values.data() + offset;
     DecimalColumnStatisticsImpl* decStats =
       dynamic_cast<DecimalColumnStatisticsImpl*>(colIndexStatistics.get());
     if (decStats == nullptr) {
       throw InvalidArgument("Failed to cast to DecimalColumnStatisticsImpl");
     }
-    bool hasNull = false;
+
+    ColumnWriter::add(rowBatch, offset, numValues);
+
+    const char* notNull = decBatch->hasNulls ?
+                          decBatch->notNull.data() + offset : nullptr;
+    const Int128* values = decBatch->values.data() + offset;
 
     // The current encoding of decimal columns stores the integer representation
     // of the value as an unbounded length zigzag encoded base 128 varint.
+    uint64_t count = 0;
     for (uint64_t i = 0; i < numValues; ++i) {
       if (!notNull || notNull[i]) {
         Int128 val = zigZagInt128(values[i]);
@@ -1530,16 +2038,16 @@ namespace orc {
         }
         valueStream->write(buffer, static_cast<size_t>(data - buffer));
 
-        decStats->increase(1);
+        ++count;
         decStats->update(Decimal(values[i], static_cast<int32_t>(scale)));
-      } else if (!hasNull) {
-        hasNull = true;
       }
+    }
+    decStats->increase(count);
+    if (count < numValues) {
+      decStats->setHasNull(true);
     }
     std::vector<int64_t> scales(numValues, static_cast<int64_t>(scale));
     scaleEncoder->add(scales.data(), numValues, notNull);
-
-    decStats->setHasNull(hasNull);
   }
 
   class ListColumnWriter : public ColumnWriter {
@@ -1577,6 +2085,10 @@ namespace orc {
 
     virtual void recordPosition() const override;
 
+    virtual void writeDictionary() override;
+
+    virtual void reset() override;
+
   private:
     std::unique_ptr<RleEncoder> lengthEncoder;
     RleVersion rleVersion;
@@ -1613,12 +2125,12 @@ namespace orc {
   void ListColumnWriter::add(ColumnVectorBatch& rowBatch,
                              uint64_t offset,
                              uint64_t numValues) {
-    ColumnWriter::add(rowBatch, offset, numValues);
-
     ListVectorBatch* listBatch = dynamic_cast<ListVectorBatch*>(&rowBatch);
     if (listBatch == nullptr) {
       throw InvalidArgument("Failed to cast to ListVectorBatch");
     }
+
+    ColumnWriter::add(rowBatch, offset, numValues);
 
     int64_t* offsets = listBatch->offsets.data() + offset;
     const char* notNull = listBatch->hasNulls ?
@@ -1639,19 +2151,20 @@ namespace orc {
     lengthEncoder->add(offsets, numValues, notNull);
 
     if (enableIndex) {
-      bool hasNull = false;
       if (!notNull) {
         colIndexStatistics->increase(numValues);
       } else {
+        uint64_t count = 0;
         for (uint64_t i = 0; i < numValues; ++i) {
           if (notNull[i]) {
-            colIndexStatistics->increase(1);
-          } else if (!hasNull) {
-            hasNull = true;
+            ++count;
           }
         }
+        colIndexStatistics->increase(count);
+        if (count < numValues) {
+          colIndexStatistics->setHasNull(true);
+        }
       }
-      colIndexStatistics->setHasNull(hasNull);
     }
   }
 
@@ -1738,6 +2251,19 @@ namespace orc {
     lengthEncoder->recordPosition(rowIndexPosition.get());
   }
 
+  void ListColumnWriter::reset() {
+    ColumnWriter::reset();
+    if (child) {
+      child->reset();
+    }
+  }
+
+  void ListColumnWriter::writeDictionary() {
+    if (child) {
+      child->writeDictionary();
+    }
+  }
+
   class MapColumnWriter : public ColumnWriter {
   public:
     MapColumnWriter(const Type& type,
@@ -1772,6 +2298,10 @@ namespace orc {
       std::vector<proto::Stream> &streams) const override;
 
     virtual void recordPosition() const override;
+
+    virtual void writeDictionary() override;
+
+    virtual void reset() override;
 
   private:
     std::unique_ptr<ColumnWriter> keyWriter;
@@ -1813,12 +2343,12 @@ namespace orc {
   void MapColumnWriter::add(ColumnVectorBatch& rowBatch,
                             uint64_t offset,
                             uint64_t numValues) {
-    ColumnWriter::add(rowBatch, offset, numValues);
-
     MapVectorBatch* mapBatch = dynamic_cast<MapVectorBatch*>(&rowBatch);
     if (mapBatch == nullptr) {
       throw InvalidArgument("Failed to cast to MapVectorBatch");
     }
+
+    ColumnWriter::add(rowBatch, offset, numValues);
 
     int64_t* offsets = mapBatch->offsets.data() + offset;
     const char* notNull = mapBatch->hasNulls ?
@@ -1843,19 +2373,20 @@ namespace orc {
     }
 
     if (enableIndex) {
-      bool hasNull = false;
       if (!notNull) {
         colIndexStatistics->increase(numValues);
       } else {
+        uint64_t count = 0;
         for (uint64_t i = 0; i < numValues; ++i) {
           if (notNull[i]) {
-            colIndexStatistics->increase(1);
-          } else if (!hasNull) {
-            hasNull = true;
+            ++count;
           }
         }
+        colIndexStatistics->increase(count);
+        if (count < numValues) {
+          colIndexStatistics->setHasNull(true);
+        }
       }
-      colIndexStatistics->setHasNull(hasNull);
     }
   }
 
@@ -1970,6 +2501,25 @@ namespace orc {
     lengthEncoder->recordPosition(rowIndexPosition.get());
   }
 
+  void MapColumnWriter::reset() {
+    ColumnWriter::reset();
+    if (keyWriter) {
+      keyWriter->reset();
+    }
+    if (elemWriter) {
+      elemWriter->reset();
+    }
+  }
+
+  void MapColumnWriter::writeDictionary() {
+    if (keyWriter) {
+      keyWriter->writeDictionary();
+    }
+    if (elemWriter) {
+      elemWriter->writeDictionary();
+    }
+  }
+
   class UnionColumnWriter : public ColumnWriter {
   public:
     UnionColumnWriter(const Type& type,
@@ -2005,6 +2555,10 @@ namespace orc {
 
     virtual void recordPosition() const override;
 
+    virtual void writeDictionary() override;
+
+    virtual void reset() override;
+
   private:
     std::unique_ptr<ByteRleEncoder> rleEncoder;
     std::vector<ColumnWriter*> children;
@@ -2039,12 +2593,12 @@ namespace orc {
   void UnionColumnWriter::add(ColumnVectorBatch& rowBatch,
                               uint64_t offset,
                               uint64_t numValues) {
-    ColumnWriter::add(rowBatch, offset, numValues);
-
     UnionVectorBatch* unionBatch = dynamic_cast<UnionVectorBatch*>(&rowBatch);
     if (unionBatch == nullptr) {
       throw InvalidArgument("Failed to cast to UnionVectorBatch");
     }
+
+    ColumnWriter::add(rowBatch, offset, numValues);
 
     const char* notNull = unionBatch->hasNulls ?
                           unionBatch->notNull.data() + offset : nullptr;
@@ -2073,19 +2627,20 @@ namespace orc {
 
     // update stats
     if (enableIndex) {
-      bool hasNull = false;
       if (!notNull) {
         colIndexStatistics->increase(numValues);
       } else {
+        uint64_t count = 0;
         for (uint64_t i = 0; i < numValues; ++i) {
           if (notNull[i]) {
-            colIndexStatistics->increase(1);
-          } else if (!hasNull) {
-            hasNull = true;
+            ++count;
           }
         }
+        colIndexStatistics->increase(count);
+        if (count < numValues) {
+          colIndexStatistics->setHasNull(true);
+        }
       }
-      colIndexStatistics->setHasNull(hasNull);
     }
   }
 
@@ -2170,6 +2725,19 @@ namespace orc {
   void UnionColumnWriter::recordPosition() const {
     ColumnWriter::recordPosition();
     rleEncoder->recordPosition(rowIndexPosition.get());
+  }
+
+  void UnionColumnWriter::reset() {
+    ColumnWriter::reset();
+    for (uint32_t i = 0; i < children.size(); ++i) {
+      children[i]->reset();
+    }
+  }
+
+  void UnionColumnWriter::writeDictionary() {
+    for (uint32_t i = 0; i < children.size(); ++i) {
+      children[i]->writeDictionary();
+    }
   }
 
   std::unique_ptr<ColumnWriter> buildWriter(

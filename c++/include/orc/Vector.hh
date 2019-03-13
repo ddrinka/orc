@@ -50,6 +50,8 @@ namespace orc {
     DataBuffer<char> notNull;
     // whether there are any null values
     bool hasNulls;
+    // whether the vector batch is encoded
+    bool isEncoded;
 
     // custom memory pool
     MemoryPool& memoryPool;
@@ -113,6 +115,40 @@ namespace orc {
     DataBuffer<int64_t> length;
   };
 
+  struct StringDictionary {
+    StringDictionary(MemoryPool& pool);
+    DataBuffer<char> dictionaryBlob;
+
+    // Offset for each dictionary key entry.
+    DataBuffer<int64_t> dictionaryOffset;
+
+    void getValueByIndex(int64_t index, char*& valPtr, int64_t& length) {
+      if (index < 0 || static_cast<uint64_t>(index) >= dictionaryOffset.size()) {
+        throw std::out_of_range("index out of range.");
+      }
+
+      int64_t* offsetPtr = dictionaryOffset.data();
+
+      valPtr = dictionaryBlob.data() + offsetPtr[index];
+      length = offsetPtr[index + 1] - offsetPtr[index];
+    }
+  };
+
+  /**
+   * Include a index array with reference to corresponding dictionary.
+   * User first obtain index from index array and retrieve string pointer
+   * and length by calling getValueByIndex() from dictionary.
+   */
+  struct EncodedStringVectorBatch : public StringVectorBatch {
+    EncodedStringVectorBatch(uint64_t capacity, MemoryPool& pool);
+    virtual ~EncodedStringVectorBatch();
+    std::string toString() const;
+    std::shared_ptr<StringDictionary> dictionary;
+
+    // index for dictionary entry
+    DataBuffer<int64_t> index;
+  };
+
   struct StructVectorBatch: public ColumnVectorBatch {
     StructVectorBatch(uint64_t capacity, MemoryPool& pool);
     virtual ~StructVectorBatch();
@@ -134,7 +170,7 @@ namespace orc {
 
     /**
      * The offset of the first element of each list.
-     * The length of list i is startOffset[i+1] - startOffset[i].
+     * The length of list i is offsets[i+1] - offsets[i].
      */
     DataBuffer<int64_t> offsets;
 
@@ -151,8 +187,8 @@ namespace orc {
     bool hasVariableLength();
 
     /**
-     * The offset of the first element of each list.
-     * The length of list i is startOffset[i+1] - startOffset[i].
+     * The offset of the first element of each map.
+     * The size of map i is offsets[i+1] - offsets[i].
      */
     DataBuffer<int64_t> offsets;
 

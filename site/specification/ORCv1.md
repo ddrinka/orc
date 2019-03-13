@@ -297,7 +297,7 @@ message DecimalStatistics {
 ```
 
 Date columns record the minimum and maximum values as the number of
-days since the epoch (1/1/2015).
+days since the UNIX epoch (1/1/1970 in UTC).
 
 ```
 message DateStatistics {
@@ -308,13 +308,19 @@ message DateStatistics {
 ```
 
 Timestamp columns record the minimum and maximum values as the number of
-milliseconds since the epoch (1/1/2015).
+milliseconds since the UNIX epoch (1/1/1970 00:00:00). Before ORC-135, the
+local timezone offset was included and they were stored as `minimum` and
+`maximum`. After ORC-135, the timestamp is adjusted to UTC before being
+converted to milliseconds and stored in `minimumUtc` and `maximumUtc`.
 
 ```
 message TimestampStatistics {
  // min,max values saved as milliseconds since epoch
  optional sint64 minimum = 1;
  optional sint64 maximum = 2;
+ // min,max values saved as milliseconds since UNIX epoch
+ optional sint64 minimumUtc = 3;
+ optional sint64 maximumUtc = 4;
 }
 ```
 
@@ -438,7 +444,7 @@ values.
 * Run - a sequence of at least 3 identical values
 * Literals - a sequence of non-identical values
 
-The first byte of each group of values is a header than determines
+The first byte of each group of values is a header that determines
 whether it is a run (value between 0 to 127) or literal list (value
 between -128 to -1). For runs, the control byte is the length of the
 run minus the length of the minimal run (3) and the control byte for
@@ -581,8 +587,6 @@ the index values and the additional value bits.
   bit is set, the entire value is negated.
 * Data values (W * L bits padded to the byte) - A sequence of W bit positive
   values that are added to the base value.
-* Data values (W * L bits padded to the byte) - A sequence of W bit positive
-  values that are added to the base value.
 * Patch list (PLL * (PGW + PW) bytes) - A list of patches for values
   that didn't fit within W bits. Each entry in the list consists of a
   gap, which is the number of elements skipped from the previous
@@ -618,7 +622,7 @@ if the series is increasing or decreasing.
   * 9 bits for run length (L) (1 to 512 values)
 * Base value - encoded as (signed or unsigned) varint
 * Delta base - encoded as signed varint
-* Delta values $W * (L - 2)$ bytes - encode each delta after the first
+* Delta values (W * (L - 2)) bytes - encode each delta after the first
   one. If the delta base is positive, the sequence is increasing and if it is
   negative the sequence is decreasing.
 
@@ -860,9 +864,9 @@ number of nanoseconds.
 
 Because the number of nanoseconds often has a large number of trailing
 zeros, the number has trailing decimal zero digits removed and the
-last three bits are used to record how many zeros were removed. Thus
-1000 nanoseconds would be serialized as 0x0b and 100000 would be
-serialized as 0x0d.
+last three bits are used to record how many zeros were removed. if the
+trailing zeros are more than 2. Thus 1000 nanoseconds would be
+serialized as 0x0a and 100000 would be serialized as 0x0c.
 
 Encoding      | Stream Kind     | Optional | Contents
 :------------ | :-------------- | :------- | :-------
@@ -899,7 +903,7 @@ DIRECT_V2     | PRESENT         | Yes      | Boolean RLE
 ## Map Columns
 
 Maps are encoded as the PRESENT stream and a length stream with number
-of items in each list. They have a child column for the key and
+of items in each map. They have a child column for the key and
 another child column for the value.
 
 Encoding      | Stream Kind     | Optional | Contents
@@ -978,7 +982,7 @@ group (default to 10,000 rows) in a column. Only the row groups that
 satisfy min/max row index evaluation will be evaluated against the
 bloom filter index.
 
-Each BloomFilterEntry stores the number of hash functions ('k') used
+Each bloom filter entry stores the number of hash functions ('k') used
 and the bitset backing the bloom filter. The original encoding (pre
 ORC-101) of bloom filters used the bitset field encoded as a repeating
 sequence of longs in the bitset field with a little endian encoding

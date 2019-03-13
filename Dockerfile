@@ -33,12 +33,13 @@ RUN apt-get install -y \
   maven \
   tzdata
 
-COPY . /root
+COPY . /root/orc
 
 WORKDIR /root
-VOLUME /root/.m2/repository
 
-RUN mkdir build && \
-  cd build && \
+RUN mkdir orc/build && \
+  cd orc/build && \
   cmake .. -DBUILD_LIBHDFSPP=OFF -DBUILD_CPP_TESTS=OFF && \
   make
+
+ENTRYPOINT ["java","-jar","/root/orc/build/java/tools/orc-tools-1.6.0-SNAPSHOT-uber.jar"]
